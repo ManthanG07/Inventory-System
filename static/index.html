@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inventory</title>
+<style>
+:root{--bg:#e8edf1;--panel:#fff;--ink:#18242f;--muted:#5a6a77;--line:#cdd7df;--accent:#1d5f8a;--warn:#b4400f;--warn-bg:#fdece1}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,"Segoe UI",sans-serif}
+header,main{max-width:1100px;margin:auto;padding:0 24px}
+header{padding-top:20px}
+h1{margin:0 0 12px;font-size:1.5rem;letter-spacing:-.01em}
+h2{margin:0 0 4px;font-size:1rem}
+#alert{display:none;padding:10px 14px;border-left:4px solid var(--warn);background:var(--warn-bg);border-radius:4px;color:#6e2606}
+#alert.show{display:block}
+main{margin-top:16px;margin-bottom:40px;display:grid;grid-template-columns:280px 1fr;gap:16px;align-items:start}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:16px}
+label{display:block;margin-top:10px;font-size:.85rem;color:var(--muted)}
+input{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:4px;font:inherit;color:var(--ink);background:#fff}
+button{font:inherit;cursor:pointer;border:1px solid var(--line);background:#fff;border-radius:4px;padding:6px 10px;color:var(--ink)}
+button.primary{width:100%;margin-top:16px;padding:9px;background:var(--accent);border-color:var(--accent);color:#fff}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;margin-top:12px}
+th{text-align:left;font-size:.85rem;color:var(--muted);padding:8px;border-bottom:2px solid var(--line)}
+td{padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:middle}
+td input{width:84px;padding:5px 6px}
+.qty{display:flex;gap:4px;white-space:nowrap}
+.qty button{padding:4px 9px}
+tr.low td:first-child{box-shadow:inset 4px 0 var(--warn)}
+tr.low .qty input{border-color:var(--warn);color:var(--warn);font-weight:600}
+.del{color:var(--warn)}
+.empty{text-align:center;color:var(--muted);padding:28px}
+#toast{display:none;position:fixed;bottom:20px;left:50%;transform:translateX(-50%);padding:10px 16px;border-radius:6px;background:var(--ink);color:#fff}
+#toast.bad{background:var(--warn)}
+@media(max-width:860px){main{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Inventory</h1>
+  <div id="alert" role="status"></div>
+</header>
+<main>
+  <section class="panel">
+    <h2>Add product</h2>
+    <form id="add">
+      <label>Product ID<input name="product_id" required></label>
+      <label>Name<input name="name" required></label>
+      <label>Category<input name="category" required></label>
+      <label>Quantity<input name="quantity" type="number" min="0" step="1" required></label>
+      <label>Price<input name="price" type="number" min="0" step="0.01" required></label>
+      <button class="primary">Add product</button>
+    </form>
+  </section>
+  <section class="panel">
+    <h2>Products</h2>
+    <input id="q" type="search" placeholder="Search by name, ID or category" aria-label="Search products">
+    <div class="wrap">
+      <table>
+        <thead><tr><th>ID</th><th>Name</th><th>Category</th><th>Quantity</th><th>Price</th><th></th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+<div id="toast" role="status"></div>
+<script>
+const $ = (s) => document.querySelector(s);
+const LOW = 5; // keep in sync with LOW_STOCK in app.py
+const esc = (s) =>
+  String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+let toastTimer, searchTimer;
+
+function toast(msg, bad = false) {
+  const t = $("#toast");
+  t.textContent = msg;
+  t.className = bad ? "bad" : "";
+  t.style.display = "block";
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (t.style.display = "none"), 3500);
+}
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Request failed");
+  return data;
+}
+
+function render(rows, q) {
+  $("#rows").innerHTML = rows.length
+    ? rows
+        .map(
+          (p) => `<tr data-id="${esc(p.product_id)}" class="${p.quantity <= LOW ? "low" : ""}">
+      <td>${esc(p.product_id)}</td><td>${esc(p.name)}</td><td>${esc(p.category)}</td>
+      <td class="qty">
+        <button data-act="dec" aria-label="Reduce stock">&minus;</button>
+        <input type="number" step="1" min="0" value="${p.quantity}" data-field="quantity" aria-label="Quantity">
+        <button data-act="inc" aria-label="Increase stock">+</button>
+      </td>
+      <td><input type="number" step="0.01" min="0" value="${p.price}" data-field="price" aria-label="Price"></td>
+      <td><button class="del" data-act="del">Delete</button></td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="6" class="empty">${
+        q ? `No products match &ldquo;${esc(q)}&rdquo;.` : "No products yet. Add the first one on the left."
+      }</td></tr>`;
+}
+
+function showAlert(low) {
+  const a = $("#alert");
+  a.classList.toggle("show", low.length > 0);
+  a.textContent = low.length
+    ? `Low stock (${LOW} or fewer): ` + low.map((p) => `${p.name} (${p.quantity})`).join(", ")
+    : "";
+}
+
+async function load() {
+  const q = $("#q").value.trim();
+  try {
+    const [rows, low] = await Promise.all([
+      api("/api/products?q=" + encodeURIComponent(q)),
+      api("/api/products?low=1"),
+    ]);
+    render(rows, q);
+    showAlert(low);
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+async function run(fn, okMsg) {
+  try {
+    await fn();
+    toast(okMsg);
+  } catch (e) {
+    toast(e.message, true);
+  }
+  load(); // reload either way so the table shows the saved values
+}
+
+const url = (id) => "/api/products/" + encodeURIComponent(id);
+const update = (id, body) =>
+  run(() => api(url(id), { method: "PUT", body: JSON.stringify(body) }), "Updated " + id);
+
+$("#rows").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-act]");
+  if (!btn) return;
+  const tr = btn.closest("tr");
+  const id = tr.dataset.id;
+  if (btn.dataset.act === "del") {
+    if (confirm(`Delete ${id}?`)) run(() => api(url(id), { method: "DELETE" }), "Deleted " + id);
+    return;
+  }
+  const qty = Number(tr.querySelector('[data-field="quantity"]').value);
+  update(id, { quantity: qty + (btn.dataset.act === "inc" ? 1 : -1) });
+});
+
+$("#rows").addEventListener("change", (e) => {
+  const field = e.target.dataset.field;
+  if (field) update(e.target.closest("tr").dataset.id, { [field]: e.target.value });
+});
+
+$("#add").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const body = Object.fromEntries(new FormData(e.target));
+  try {
+    await api("/api/products", { method: "POST", body: JSON.stringify(body) });
+    e.target.reset();
+    toast("Added " + body.product_id);
+  } catch (err) {
+    toast(err.message, true);
+  }
+  load();
+});
+
+$("#q").addEventListener("input", () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(load, 250);
+});
+
+load();
+</script>
+</body>
+</html>

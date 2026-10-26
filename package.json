@@ -1,0 +1,15 @@
+{
+  "name": "inventory-system",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Inventory Management System: HTML/CSS/JS frontend, Flask backend, SQLite",
+  "scripts": {
+    "start": "python app.py",
+    "format": "prettier --write \"static/**/*.{html,css,js}\"",
+    "check": "prettier --check \"static/**/*.{html,css,js}\"",
+    "test": "pytest -q"
+  },
+  "devDependencies": {
+    "prettier": "^3.3.0"
+  }
+}
